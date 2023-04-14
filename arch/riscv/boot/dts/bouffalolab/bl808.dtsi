@@ -160,6 +160,43 @@
 			status = "disabled";
 		};
 
+		dma0: dma@2000C000  {
+			compatible = "bflb,bl808-dma0";
+			reg = <0x2000C000 0x1000>;
+			/* TODO: extended irqs here */
+			status = "disabled";
+		};
+
+		dma1: dma@20071000  {
+			compatible = "bflb,bl808-dma1";
+			reg = <0x20071000 0x1000>;
+			/* TODO: extended irqs here */
+			status = "disabled";
+		};
+
+		dma2: dma@30001000  {
+			compatible = "bflb,bl808-dma2";
+			reg = <0x30001000 0x1000>;
+			interrupts = <40 IRQ_TYPE_LEVEL_HIGH>,
+						<41 IRQ_TYPE_LEVEL_HIGH>,
+						<42 IRQ_TYPE_LEVEL_HIGH>,
+						<43 IRQ_TYPE_LEVEL_HIGH>,
+						<44 IRQ_TYPE_LEVEL_HIGH>,
+						<45 IRQ_TYPE_LEVEL_HIGH>,
+						<46 IRQ_TYPE_LEVEL_HIGH>,
+						<47 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "DMA2_INT0",
+							"DMA2_INT1",
+							"DMA2_INT2",
+							"DMA2_INT3",
+							"DMA2_INT4",
+							"DMA2_INT5",
+							"DMA2_INT6",
+							"DMA2_INT7";
+			#dma-cells = <1>;
+			status = "enabled";
+		};
+
 		plic: interrupt-controller@e0000000 {
 			compatible = "thead,c900-plic";
 			reg = <0xe0000000 0x4000000>;

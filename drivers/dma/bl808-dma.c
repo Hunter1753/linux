@@ -148,6 +148,51 @@
 #define BL808_DMA_LLICOUNTER_SHIFT    UL(20)
 #define BL808_DMA_LLICOUNTER_MASK     (0x3ff << BL808_DMA_LLICOUNTER_SHIFT)
 
+#define BL808_DMA_SUPPORTED_PERIPHERALS_UART  BIT(0)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_I2C   BIT(1)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_SPI   BIT(2)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_ADC   BIT(3)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_IR    BIT(4)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_GPIO  BIT(5)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_Audio BIT(6)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_I2S   BIT(7)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_PDM   BIT(8)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_DBI   BIT(9)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_DSI   BIT(10)
+
+#define BL808_DMA_SUPPORTED_PERIPHERALS_COM 	(BL808_DMA_SUPPORTED_PERIPHERALS_UART | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_I2C | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_SPI)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_DMA 	(BL808_DMA_SUPPORTED_PERIPHERALS_COM | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_ADC | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_IR | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_GPIO | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_Audio | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_I2S | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_PDM)
+#define BL808_DMA_SUPPORTED_PERIPHERALS_DMAMM	(BL808_DMA_SUPPORTED_PERIPHERALS_COM | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_DBI | \
+												 BL808_DMA_SUPPORTED_PERIPHERALS_DSI)
+
+struct bl808_dma_adapter_data {
+	u8 channels;
+	/**
+	 * BIT: Peripheral
+	 *   0: UART
+	 *   1: I2C
+	 *   2: SPI
+	 *   3: ADC
+	 *   4: IR
+	 *   5: GPIO
+	 *   6: Audio
+	 *   7: I2S
+	 *   8: PDM
+	 *   9: DBI
+	 *  10: DSI
+	 */
+	u16 supported_peripherals;
+};
+
 /**
  * struct bl808_dmadev - BL808 DMA controller
  * @ddev: DMA device
@@ -171,19 +216,19 @@ struct bl808_dma_cb {
 	uint32_t pad[2];
 };
 
-struct bl808_cb_entry {
+struct bl808_dma_cb_entry {
 	struct bl808_dma_cb *cb;
 	dma_addr_t paddr;
 };
 
-struct bl808_chan {
+struct bl808_dma_chan {
 	struct virt_dma_chan vc;
 
 	struct dma_slave_config	cfg;
 	unsigned int dreq;
 
 	int ch;
-	struct bl808_desc *desc;
+	struct bl808_dma_desc *desc;
 	struct dma_pool *cb_pool;
 
 	void __iomem *chan_base;
@@ -193,8 +238,8 @@ struct bl808_chan {
 	bool is_lite_channel;
 };
 
-struct bl808_desc {
-	struct bl808_chan *c;
+struct bl808_dma_desc {
+	struct bl808_dma_chan *c;
 	struct virt_dma_desc vd;
 	enum dma_transfer_direction dir;
 
@@ -203,153 +248,28 @@ struct bl808_desc {
 
 	bool cyclic;
 
-	struct bl808_cb_entry cb_list[];
+	struct bl808_dma_cb_entry cb_list[];
 };
+
+static void bl808_dma_free(struct bl808_dmadev *od)
+{
+	struct bl808_dma_chan *c, *next;
+
+	list_for_each_entry_safe(c, next, &od->ddev.channels, vc.chan.device_node) {
+		list_del(&c->vc.chan.device_node);
+		tasklet_kill(&c->vc.task);
+	}
+
+	dma_unmap_page_attrs(od->ddev.dev, od->zero_page, PAGE_SIZE, DMA_TO_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+}
 
 static int bl808_dma_probe(struct platform_device *pdev)
 {
 	struct bl808_dmadev *od;
 	struct resource *res;
 	void __iomem *base;
-	int rc;
-	int i, j;
-	int irq[BL808_DMA_MAX_DMA_CHAN_SUPPORTED + 1];
-	int irq_flags;
-	uint32_t chans_available;
-	char chan_name[BL808_DMA_CHAN_NAME_SIZE];
 
-	if (!pdev->dev.dma_mask)
-		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
-
-	rc = dma_set_mask_and_coherent(&pdev->dev, BL808_DMA_BIT_MASK(32));
-	if (rc) {
-		dev_err(&pdev->dev, "Unable to set DMA mask\n");
-		return rc;
-	}
-
-	od = devm_kzalloc(&pdev->dev, sizeof(*od), GFP_KERNEL);
-	if (!od)
-		return -ENOMEM;
-
-	dma_set_max_seg_size(&pdev->dev, 0x3FFFFFFF);
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
-
-	od->base = base;
-
-	dma_cap_set BL808_DMA_SLAVE, od->ddev.cap_mask);
-	dma_cap_set BL808_DMA_PRIVATE, od->ddev.cap_mask);
-	dma_cap_set BL808_DMA_CYCLIC, od->ddev.cap_mask);
-	dma_cap_set BL808_DMA_MEMCPY, od->ddev.cap_mask);
-	od->ddev.device_alloc_chan_resources = bl808_dma_alloc_chan_resources;
-	od->ddev.device_free_chan_resources = bl808_dma_free_chan_resources;
-	od->ddev.device_tx_status = bl808_dma_tx_status;
-	od->ddev.device_issue_pending = bl808_dma_issue_pending;
-	od->ddev.device_prep_dma_cyclic = bl808_dma_prep_dma_cyclic;
-	od->ddev.device_prep_slave_sg = bl808_dma_prep_slave_sg;
-	od->ddev.device_prep_dma_memcpy = bl808_dma_prep_dma_memcpy;
-	od->ddev.device_config = bl808_dma_slave_config;
-	od->ddev.device_terminate_all = bl808_dma_terminate_all;
-	od->ddev.device_synchronize = bl808_dma_synchronize;
-	od->ddev.src_addr_widths = BIT BL808_DMA_SLAVE_BUSWIDTH_4_BYTES);
-	od->ddev.dst_addr_widths = BIT BL808_DMA_SLAVE_BUSWIDTH_4_BYTES);
-	od->ddev.directions = BIT BL808_DMA_DEV_TO_MEM) | BIT BL808_DMA_MEM_TO_DEV) |
-				  BIT BL808_DMA_MEM_TO_MEM);
-	od->ddev.residue_granularity = BL808_DMA_RESIDUE_GRANULARITY_BURST;
-	od->ddev.descriptor_reuse = true;
-	od->ddev.dev = &pdev->dev;
-	INIT_LIST_HEAD(&od->ddev.channels);
-
-	platform_set_drvdata(pdev, od);
-
-	od->zero_page = dma_map_page_attrs(od->ddev.dev, ZERO_PAGE(0), 0,
-					   PAGE_SIZE, BL808_DMA_TO_DEVICE,
-					   BL808_DMA_ATTR_SKIP_CPU_SYNC);
-	if (dma_mapping_error(od->ddev.dev, od->zero_page)) {
-		dev_err(&pdev->dev, "Failed to map zero page\n");
-		return -ENOMEM;
-	}
-
-	/* Request DMA channel mask from device tree */
-	if (of_property_read_u32(pdev->dev.of_node,
-			"brcm,dma-channel-mask",
-			&chans_available)) {
-		dev_err(&pdev->dev, "Failed to get channel mask\n");
-		rc = -EINVAL;
-		goto err_no_dma;
-	}
-
-	/* get irqs for each channel that we support */
-	for (i = 0; i <= BL808_DMA_MAX_DMA_CHAN_SUPPORTED; i++) {
-		/* skip masked out channels */
-		if (!(chans_available & (1 << i))) {
-			irq[i] = -1;
-			continue;
-		}
-
-		/* get the named irq */
-		snprintf(chan_name, sizeof(chan_name), "dma%i", i);
-		irq[i] = platform_get_irq_byname(pdev, chan_name);
-		if (irq[i] >= 0)
-			continue;
-
-		/* legacy device tree case handling */
-		dev_warn_once(&pdev->dev,
-				  "missing interrupt-names property in device tree - legacy interpretation is used\n");
-		/*
-		 * in case of channel >= 11
-		 * use the 11th interrupt and that is shared
-		 */
-		irq[i] = platform_get_irq(pdev, i < 11 ? i : 11);
-	}
-
-	/* get irqs for each channel */
-	for (i = 0; i <= BL808_DMA_MAX_DMA_CHAN_SUPPORTED; i++) {
-		/* skip channels without irq */
-		if (irq[i] < 0)
-			continue;
-
-		/* check if there are other channels that also use this irq */
-		irq_flags = 0;
-		for (j = 0; j <= BL808_DMA_MAX_DMA_CHAN_SUPPORTED; j++)
-			if ((i != j) && (irq[j] == irq[i])) {
-				irq_flags = IRQF_SHARED;
-				break;
-			}
-
-		/* initialize the channel */
-		rc = bl808_dma_chan_init(od, i, irq[i], irq_flags);
-		if (rc)
-			goto err_no_dma;
-	}
-
-	dev_dbg(&pdev->dev, "Initialized %i DMA channels\n", i);
-
-	/* Device-tree DMA controller registration */
-	rc = of_dma_controller_register(pdev->dev.of_node,
-			bl808_dma_xlate, od);
-	if (rc) {
-		dev_err(&pdev->dev, "Failed to register DMA controller\n");
-		goto err_no_dma;
-	}
-
-	rc = dma_async_device_register(&od->ddev);
-	if (rc) {
-		dev_err(&pdev->dev,
-			"Failed to register slave DMA engine device: %d\n", rc);
-		goto err_no_dma;
-	}
-
-	dev_dbg(&pdev->dev, "Load BL808 DMA engine driver\n");
-
-	return 0;
-
-err_no_dma:
-	bl808_dma_free(od);
-	return rc;
+	return -1;
 }
 
 static int bl808_dma_remove(struct platform_device *pdev)
@@ -362,8 +282,25 @@ static int bl808_dma_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static const struct bl808_dma_adapter_data bl808_dma0_data = {
+	.channels = 8,
+	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMA,
+};
+
+static const struct bl808_dma_adapter_data bl808_dma1_data = {
+	.channels = 4,
+	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMA,
+};
+
+static const struct bl808_dma_adapter_data bl808_dma2_data = {
+	.channels = 8,
+	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMAMM,
+};
+
 static const struct of_device_id bl808_dma_of_match[] = {
-		{ .compatible = "bflb,bl808-dma" },
+		{ .compatible = "bflb,bl808-dma0", .data = &bl808_dma0_data},
+		{ .compatible = "bflb,bl808-dma1", .data = &bl808_dma1_data},
+		{ .compatible = "bflb,bl808-dma2", .data = &bl808_dma2_data},
 		{},
 };
 MODULE_DEVICE_TABLE(of, bl808_dma_of_match);
