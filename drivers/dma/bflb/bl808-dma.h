@@ -3,6 +3,7 @@
  * Based on bflb_dma.c, by Bouffalolab team
  * Based on bcm2835-dma.c
  * Based on altera-msgdma.c
+ * Based on xilinx_dma.c
  */
 
 #include <linux/dmaengine.h>
@@ -148,63 +149,33 @@
 #define BL808_DMA_LLICOUNTER_SHIFT    UL(20)
 #define BL808_DMA_LLICOUNTER_MASK     (0x3ff << BL808_DMA_LLICOUNTER_SHIFT)
 
-#define BL808_DMA_SUPPORTED_PERIPHERALS_UART  BIT(0)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_I2C   BIT(1)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_SPI   BIT(2)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_ADC   BIT(3)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_IR    BIT(4)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_GPIO  BIT(5)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_Audio BIT(6)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_I2S   BIT(7)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_PDM   BIT(8)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_DBI   BIT(9)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_DSI   BIT(10)
-
-#define BL808_DMA_SUPPORTED_PERIPHERALS_COM 	(BL808_DMA_SUPPORTED_PERIPHERALS_UART | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_I2C | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_SPI)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_DMA 	(BL808_DMA_SUPPORTED_PERIPHERALS_COM | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_ADC | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_IR | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_GPIO | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_Audio | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_I2S | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_PDM)
-#define BL808_DMA_SUPPORTED_PERIPHERALS_DMAMM	(BL808_DMA_SUPPORTED_PERIPHERALS_COM | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_DBI | \
-												 BL808_DMA_SUPPORTED_PERIPHERALS_DSI)
-
 struct bl808_dma_adapter_data {
 	u8 channels;
-	/**
-	 * BIT: Peripheral
-	 *   0: UART
-	 *   1: I2C
-	 *   2: SPI
-	 *   3: ADC
-	 *   4: IR
-	 *   5: GPIO
-	 *   6: Audio
-	 *   7: I2S
-	 *   8: PDM
-	 *   9: DBI
-	 *  10: DSI
-	 */
-	u16 supported_peripherals;
 };
 
 /**
- * struct bl808_dmadev - BL808 DMA controller
+ * struct bl808_dma_device - BL808 DMA controller
  * @ddev: DMA device
  * @base: base address of register map
  * @zero_page: bus address of zero page (to detect transactions copying from
  *	zero page and avoid accessing memory if so)
  */
-struct bl808_dmadev {
+struct bl808_dma_device {
 	struct dma_device ddev;
 	void __iomem *base;
 	dma_addr_t zero_page;
 };
+
+static inline void bl808_dma_writel(struct bl808_dma_device *dma_dev,
+				      u32 reg, u32 val)
+{
+	writel(val, dma_dev->base + reg);
+}
+
+static inline u32 bl808_dma_readl(struct bl808_dma_device *dma_dev, u32 reg)
+{
+	return readl(dma_dev->base + reg);
+}
 
 struct bl808_dma_cb {
 	uint32_t info;
@@ -251,72 +222,18 @@ struct bl808_dma_desc {
 	struct bl808_dma_cb_entry cb_list[];
 };
 
-static void bl808_dma_free(struct bl808_dmadev *od)
-{
-	struct bl808_dma_chan *c, *next;
-
-	list_for_each_entry_safe(c, next, &od->ddev.channels, vc.chan.device_node) {
-		list_del(&c->vc.chan.device_node);
-		tasklet_kill(&c->vc.task);
-	}
-
-	dma_unmap_page_attrs(od->ddev.dev, od->zero_page, PAGE_SIZE, DMA_TO_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
-}
-
-static int bl808_dma_probe(struct platform_device *pdev)
-{
-	struct bl808_dmadev *od;
-	struct resource *res;
-	void __iomem *base;
-
-	return -1;
-}
-
 static int bl808_dma_remove(struct platform_device *pdev)
 {
-	struct bl808_dma_dev *od = platform_get_drvdata(pdev);
+	struct bl808_dma_device *xdev = platform_get_drvdata(pdev);
+	int i;
 
-	dma_async_device_unregister(&od->ddev);
-	bl808_dma_free(od);
+	of_dma_controller_free(pdev->dev.of_node);
+
+	dma_async_device_unregister(&xdev->common);
+
+	for (i = 0; i < xdev->dma_config->max_channels; i++)
+		if (xdev->chan[i])
+			bl808_dma_chan_remove(xdev->chan[i]);
 
 	return 0;
 }
-
-static const struct bl808_dma_adapter_data bl808_dma0_data = {
-	.channels = 8,
-	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMA,
-};
-
-static const struct bl808_dma_adapter_data bl808_dma1_data = {
-	.channels = 4,
-	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMA,
-};
-
-static const struct bl808_dma_adapter_data bl808_dma2_data = {
-	.channels = 8,
-	.supported_peripherals = BL808_DMA_SUPPORTED_PERIPHERALS_DMAMM,
-};
-
-static const struct of_device_id bl808_dma_of_match[] = {
-		{ .compatible = "bflb,bl808-dma0", .data = &bl808_dma0_data},
-		{ .compatible = "bflb,bl808-dma1", .data = &bl808_dma1_data},
-		{ .compatible = "bflb,bl808-dma2", .data = &bl808_dma2_data},
-		{},
-};
-MODULE_DEVICE_TABLE(of, bl808_dma_of_match);
-
-static struct platform_driver bl808_dma_driver = {
-		.probe		= bl808_dma_probe,
-		.remove		= bl808_dma_remove,
-		.driver		= {
-				.name	= "bl808-dma",
-				.of_match_table = bl808_dma_of_match,
-		},
-};
-
-module_platform_driver(bl808_dma_driver);
-
-MODULE_AUTHOR("Alessandro Guttrof <hunter1753@gmail.com>");
-MODULE_DESCRIPTION("bl808 dma engine driver");
-MODULE_LICENSE("GPL v2");
-MODULE_ALIAS("platform:bl808-dma");

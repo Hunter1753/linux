@@ -140,13 +140,21 @@ config DMA_BCM2835
 	select DMA_ENGINE
 	select DMA_VIRTUAL_CHANNELS
 
-config DMA_BL808
-	tristate "Bouffalo Lab BL808 DMA engine support"
+config DMA_BL808_MM
+	tristate "Bouffalo Lab BL808 DMA engine (DMA2) support"
 	depends on SOC_BOUFFALOLAB
 	select DMA_ENGINE
 	select DMA_VIRTUAL_CHANNELS
 	help
-	  Support the DMA engine found on the BL808 soc.
+	  Support the DMA engine found on the BL808 soc on core d0 (MM).
+
+config DMA_BL808
+	tristate "Bouffalo Lab BL808 DMA engine (DMA0, DMA1) support"
+	depends on SOC_BOUFFALOLAB
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Support the DMA engines found on the BL808 soc on cores m0 and lp.
 
 config DMA_JZ4780
 	tristate "JZ4780 DMA support"
