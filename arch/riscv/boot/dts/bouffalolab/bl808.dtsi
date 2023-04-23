@@ -52,6 +52,13 @@
 		#clock-cells = <0>;
 	};
 
+	rc32m: rc32m-clk {
+		compatible = "fixed-clock";
+		clock-frequency = <32000000>;
+		clock-output-names = "rc32m";
+		#clock-cells = <0>;
+	};
+
 	mm_b: mm_bclk1x {
 		compatible = "fixed-clock";
 		clock-frequency = <160000000>;
@@ -111,8 +118,8 @@
 								BFLB_IPC_DEVICE_I2C0
 								IRQ_TYPE_EDGE_RISING>;
 			mboxes = <&ipclic BFLB_IPC_SOURCE_M0 BFLB_IPC_DEVICE_I2C0>;
-			clocks = <&mm_b>;
-			clock-frequency = <100000>;
+			clocks = <&rc32m>;
+			clock-frequency = <400000>;
 			status = "disabled";
 		};
 
@@ -123,8 +130,8 @@
 								BFLB_IPC_DEVICE_I2C1
 								IRQ_TYPE_EDGE_RISING>;
 			mboxes = <&ipclic BFLB_IPC_SOURCE_M0 BFLB_IPC_DEVICE_I2C1>;
-			clocks = <&mm_b>;
-			clock-frequency = <100000>;
+			clocks = <&rc32m>;
+			clock-frequency = <400000>;
 			status = "disabled";
 		};
 
@@ -142,7 +149,7 @@
 			reg = <0x30004000 0x1000>;
 			interrupts = <22 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&mm_b>;
-			clock-frequency = <100000>;
+			clock-frequency = <400000>;
 			status = "disabled";
 		};
 
